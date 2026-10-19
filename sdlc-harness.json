@@ -1,5 +1,5 @@
 {
   "chain": [
-    ".venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider -o addopts="
+    ".venv\\Scripts\\python.exe -m pytest tests -q -p no:cacheprovider -o addopts="
   ]
 }
