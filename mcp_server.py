@@ -1,3 +1,4 @@
+import argparse
 import functools
 import inspect
 import os
@@ -331,6 +332,7 @@ def set_project_root(path: str) -> str:
     reset_context()
     _reset_indexing_state_for_new_root()
     _startup_done = False
+    apply_tool_profile()
     ensure_startup()
     _ensure_default_indexignore()
     log(f"Project root changed to: {config.PROJECT_ROOT}")
@@ -3765,10 +3767,106 @@ def _ensure_default_indexignore() -> None:
         log(f"Could not create default .indexignore: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Профіль інструментів (PROJECTMIND_TOOL_PROFILE)
+# ---------------------------------------------------------------------------
+# full (типово) — усі інструменти, як завжди. lean — лише ядро читання й пошуку:
+# кожен опис інструмента платить токенами на КОЖНЕ звернення моделі (56 описів
+# ≈ 3,5 тис. токенів, разом зі схемами ≈ 6 тис.). Деструктивні й адміністративні
+# інструменти в lean не реєструються взагалі — їх не видно моделі.
+TOOL_PROFILE_ENV = "PROJECTMIND_TOOL_PROFILE"
+TOOL_PROFILE_LEAN = "lean"
+TOOL_PROFILE_FULL = "full"
+LEAN_TOOL_NAMES = frozenset({
+    "search_codebase",
+    "find_symbol",
+    "get_symbol_relations",
+    "get_file_summary",
+    "get_file_relations",
+    "explore_directory",
+    "get_project_overview",
+    "search_memory",
+    "read_memory",
+    "get_index_stats",
+    "get_index_progress",
+    "health",
+    "search_for_errors",
+    "search_for_feature",
+    "index_changed_files",
+    "index_codebase",
+    "set_project_root",
+})
+LEAN_DESCRIPTION_LIMIT = 200
+
+
+def _short_description(text: str | None) -> str:
+    """Перший абзац docstring, стиснутий в один рядок, з обрізанням."""
+    first = (text or "").strip().split("\n\n", 1)[0]
+    flat = " ".join(first.split())
+    if len(flat) <= LEAN_DESCRIPTION_LIMIT:
+        return flat
+    return flat[: LEAN_DESCRIPTION_LIMIT - 1].rstrip() + "…"
+
+
+def resolve_tool_profile() -> str:
+    """Профіль із середовища. Невідоме значення — full, з записом у журнал."""
+    raw = (os.environ.get(TOOL_PROFILE_ENV) or "").strip().lower()
+    if raw in ("", TOOL_PROFILE_FULL):
+        return TOOL_PROFILE_FULL
+    if raw == TOOL_PROFILE_LEAN:
+        return TOOL_PROFILE_LEAN
+    log(f"{TOOL_PROFILE_ENV}={raw!r} невідомий; діє full")
+    return TOOL_PROFILE_FULL
+
+
+def apply_tool_profile(profile: str | None = None) -> str:
+    """Знімає з реєстру інструменти, яких профіль не дозволяє, і вкорочує описи.
+
+    Виклики функцій лишаються робочими — знімається лише реєстрація в MCP.
+    Повертає застосований профіль.
+    """
+    profile = profile or resolve_tool_profile()
+    if profile != TOOL_PROFILE_LEAN:
+        return TOOL_PROFILE_FULL
+    for tool in list(mcp._tool_manager.list_tools()):
+        if tool.name not in LEAN_TOOL_NAMES:
+            mcp.remove_tool(tool.name)
+        else:
+            tool.description = _short_description(tool.description)
+    return TOOL_PROFILE_LEAN
+
+
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Аргументи командного рядка. Типово — stdio, як було завжди.
+
+    Невідомі аргументи ігноруються (parse_known_args): попередня версія їх теж
+    не відхиляла, а клієнти MCP іноді додають свої прапорці.
+    """
+    parser = argparse.ArgumentParser(prog="projectmind", description="ProjectMind MCP-сервер")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="транспорт MCP (типово stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="адреса для streamable-http (типово 127.0.0.1 — лише локально)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="порт для streamable-http (типово 8000)"
+    )
+    args, _unknown = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
+    return args
+
+
 def main() -> None:
     """Console entry point (`uvx projectmind-mcp` / `projectmind`)."""
+    args = parse_cli_args()
     import warmup
 
+    apply_tool_profile()
     ensure_startup()
     _ensure_default_indexignore()
     # On the main thread, before anything can run in a worker: see warmup.py.
@@ -3779,7 +3877,15 @@ def main() -> None:
         start_daemon()
     except Exception as e:
         log(f"Maintenance daemon could not be started: {e}")
-    mcp.run()
+    if args.transport == "streamable-http":
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            log(f"streamable-http слухає не loopback ({args.host}): доступ з мережі можливий")
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        log(f"streamable-http: http://{args.host}:{args.port}/mcp")
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

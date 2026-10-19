@@ -63,6 +63,14 @@ def ensure_loaded() -> None:
                 "inside the numpy extension loader. mcp_server.main() should "
                 "have loaded them on the main thread already."
             )
+        # rank_bm25 pulls numpy in on every install (it is the keyword backend,
+        # present in BM25-only mode too). BM25Index.build() imports it on the
+        # first search, which runs in a tool worker — exactly the thread this
+        # module exists to keep numpy out of. Import it here, on the main thread.
+        try:
+            import rank_bm25  # noqa: F401  (numpy)
+        except Exception as exc:
+            logger.warning(f"Keyword backend (rank_bm25) could not be imported: {exc}")
         try:
             import symbol_graph  # noqa: F401  (tree-sitter grammars)
         except Exception as exc:

@@ -311,7 +311,26 @@ PROJECTMIND_SYMBOL_GRAPH_MAX_FILES=8000
 PROJECTMIND_SYMBOL_GRAPH_BUDGET_SECONDS=300
 PROJECTMIND_TOOL_BUDGET_SECONDS=45
 PROJECTMIND_MODEL_IDLE_UNLOAD_SECONDS=3600
+PROJECTMIND_TOOL_PROFILE=full   # full (типово, 56 інструментів) | lean (17, без деструктивних)
 ```
+
+`PROJECTMIND_TOOL_PROFILE=lean` реєструє лише ядро читання й пошуку
+(`search_codebase`, `find_symbol`, `get_symbol_relations`, `read_memory`,
+`search_memory`, `index_codebase` та ще кілька) і вкорочує їхні описи. Опис і
+схема кожного інструменту платять токенами на кожне звернення моделі: повний
+набір ≈ 6 тис. токенів, lean ≈ 1,2 тис.
+
+### Транспорт
+
+За замовчуванням сервер говорить stdio. Для HTTP:
+
+```bash
+python mcp_server.py --transport streamable-http --host 127.0.0.1 --port 8000
+# MCP-ендпоінт: http://127.0.0.1:8000/mcp
+```
+
+`--host` типово `127.0.0.1` (лише локальний доступ). Інша адреса відкриває
+сервер для мережі; робіть це свідомо.
 
 ### Ignore patterns
 

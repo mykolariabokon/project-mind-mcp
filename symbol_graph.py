@@ -1062,15 +1062,16 @@ def load_symbol_graph(path: Path | None = None) -> SymbolGraph | None:
 
 
 def is_symbol_graph_stale(graph: SymbolGraph, root_dir: Path | None = None) -> bool:
-    """Check if the graph is older than any source file (meaning rebuild needed)."""
+    """Чи граф застарів: є файл, новіший за побудову, або нові індексовані файли поза ним."""
     if root_dir is None:
         root_dir = config.PROJECT_ROOT
     graph_mtime = graph._built_at
     if graph_mtime == 0:
         return True
 
-    # Preferred check: the incremental-index metadata tracks the mtime of
-    # every indexed file — far more reliable than sampling top-level dirs.
+    # Швидкий шлях: метадані індексатора знають mtime відомих файлів. Якщо там
+    # є новіше — це точно застаріло. Мовчання метаданих нічого не доводить:
+    # файли, створені після індексації, туди ще не потрапили (картка про сліпий граф).
     try:
         if config.INDEX_METADATA_FILE.exists():
             data = json.loads(config.INDEX_METADATA_FILE.read_text(encoding="utf-8"))
@@ -1079,39 +1080,27 @@ def is_symbol_graph_stale(graph: SymbolGraph, root_dir: Path | None = None) -> b
                     (float(info.get("mtime", 0.0) or 0.0) for info in data.values()),
                     default=0.0,
                 )
-                return newest > graph_mtime
-    except Exception:
-        pass  # fall back to the directory-sampling heuristic below
-    # Quick check: scan a few top-level files
-    check_count = 0
-    try:
-        for entry in os.scandir(root_dir):
-            if check_count > 50:
-                break
-            try:
-                if entry.is_file() and entry.stat().st_mtime > graph_mtime:
+                if newest > graph_mtime:
                     return True
-            except OSError:
-                continue
-            check_count += 1
-    except OSError:
-        pass
-    # Slightly deeper: check .py files in top-level directories
-    try:
-        for entry in os.scandir(root_dir):
-            if entry.is_dir() and not entry.name.startswith("."):
-                try:
-                    for sub in os.scandir(entry.path):
-                        if sub.is_file() and sub.name.endswith(".py"):
-                            if sub.stat().st_mtime > graph_mtime:
-                                return True
-                            check_count += 1
-                            if check_count > 100:
-                                break
-                except OSError:
-                    continue
-    except OSError:
-        pass
+    except Exception:
+        pass  # метадані зіпсовані або їх немає — перевіряємо самі файли
+
+    # Повне перевірення: ті самі файли, що бере побудова графа (той самий
+    # file_scanner, ті самі розширення, ті самі ліміти). Файл новіший за побудову
+    # означає, що граф його не бачив. Власного обходу тут немає навмисно.
+    scan = scan_files(
+        root_dir,
+        extensions=set(LANGUAGE_MAP),
+        max_files=_get_max_files(),
+        budget_seconds=get_build_budget_seconds(),
+        allow_no_suffix=False,
+    )
+    for fp in scan.files:
+        try:
+            if fp.stat().st_mtime > graph_mtime:
+                return True
+        except OSError:
+            continue
     return False
 
 

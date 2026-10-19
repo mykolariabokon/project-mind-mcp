@@ -93,6 +93,7 @@ py-modules = [
     "git_utils",
     "context",
     "code_intelligence",
+    "warmup",
 ]
 
 [tool.black]
