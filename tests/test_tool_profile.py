@@ -31,7 +31,6 @@ LEAN_EXPECTED = {
     "search_for_feature",
     "index_changed_files",
     "index_codebase",
-    "set_project_root",
 }
 
 # Деструктивні й адміністративні: у lean їх бути не може.
@@ -114,3 +113,10 @@ def test_lean_descriptions_are_shorter_than_full(full_probe):
 
 def test_unknown_profile_falls_back_to_full():
     assert _probe("bogus")["count"] == 56
+
+
+def test_lean_has_no_set_project_root():
+    """Теплий сервер спільний для всіх сесій: set_project_root одного клієнта змінював би корінь для решти (#5, R-007)."""
+    lean = _probe("lean")
+    assert "set_project_root" not in lean["names"]
+    assert len(lean["names"]) == 16

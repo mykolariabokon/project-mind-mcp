@@ -3794,7 +3794,6 @@ LEAN_TOOL_NAMES = frozenset({
     "search_for_feature",
     "index_changed_files",
     "index_codebase",
-    "set_project_root",
 })
 LEAN_DESCRIPTION_LIMIT = 200
 
