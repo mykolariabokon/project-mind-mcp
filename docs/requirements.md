@@ -13,3 +13,4 @@
 | R-003 | rank_bm25 і numpy імпортуються на старті в головному потоці, а не під час першого пошуку | пошук | #1 | звичайний | done | поведінковий: tests/test_cold_search.py · test_rank_bm25_is_imported_on_main_thread_by_warmup @2026-10-19 | #1 | |
 | R-004 | Профіль lean лишає щонайбільше 20 інструментів, типовий full — усі 56 | інструменти | #1 | звичайний | done | поведінковий: tests/test_tool_profile.py · test_lean_registers_at_most_20_tools @2026-10-19 | #1 | |
 | R-005 | Режим streamable-http відповідає на initialize на локальній адресі | транспорт | #1 | звичайний | done | поведінковий: tests/test_transport_http.py · test_streamable_http_initialize_round_trip @2026-10-19 | #1 | |
+| R-006 | Теплий сервер бачить файл, створений після побудови графа: кеш графа в пам'яті перевіряється на застарілість | граф символів | #3 | звичайний | done | поведінковий: tests/test_symbol_graph_warm_cache.py · test_warm_cache_sees_file_created_after_build @2026-10-19 | #3 | |

@@ -1111,6 +1111,13 @@ def is_symbol_graph_stale(graph: SymbolGraph, root_dir: Path | None = None) -> b
 _cached_graph: SymbolGraph | None = None
 _cache_path: Path | None = None
 
+# Як часто (сек) перевіряти, чи граф у пам'яті не застарів. Перевірка сканує
+# проєкт, тож пошукові запити не мають робити її на кожен виклик. Між перевірками
+# файл, створений щойно, може ще не бути видно — це ціна за те, що запити не сканують.
+STALE_RECHECK_SECONDS = 5.0
+# time.monotonic() останньої побудови або перевірки кешованого графа.
+_stale_checked_at: float = 0.0
+
 
 def _graph_path() -> Path:
     return config.AI_DIR / "symbol_graph.json"
@@ -1168,8 +1175,18 @@ def get_or_build_symbol_graph(force: bool = False) -> SymbolGraph:
                 _cached_graph = None
             _cache_path = graph_path
 
+            global _stale_checked_at
             if _cached_graph is not None and not force:
-                return _cached_graph
+                now = _time_module.monotonic()
+                if now - _stale_checked_at < STALE_RECHECK_SECONDS:
+                    return _cached_graph
+                _stale_checked_at = now
+                if not is_symbol_graph_stale(_cached_graph):
+                    return _cached_graph
+                # Граф у пам'яті застарів (файл створено після побудови): скидаємо кеш
+                # і йдемо тим самим шляхом, що й при першому запиті — з диска або з нуля.
+                logger.info("In-memory symbol graph is stale; rebuilding...")
+                _cached_graph = None
 
             # Try loading from disk first
             if not force:
@@ -1178,6 +1195,7 @@ def get_or_build_symbol_graph(force: bool = False) -> SymbolGraph:
                     # Check if stale
                     if not is_symbol_graph_stale(loaded):
                         _cached_graph = loaded
+                        _stale_checked_at = _time_module.monotonic()
                         return loaded
                     logger.info("Symbol graph is stale; rebuilding...")
 
@@ -1189,6 +1207,7 @@ def get_or_build_symbol_graph(force: bool = False) -> SymbolGraph:
             save_symbol_graph(graph, graph_path)
 
             _cached_graph = graph
+            _stale_checked_at = _time_module.monotonic()
             return graph
         finally:
             _build_in_progress.clear()
