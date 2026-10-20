@@ -293,6 +293,8 @@ def test_locked_set_project_root_to_the_same_root_does_not_reset_shared_state(
 
     assert config.PROJECT_ROOT == root_a
     assert str(root_a) in reply, reply
+    # Той самий корінь — не помилка: відповідь каже, що нічого не змінено.
+    assert "nothing was changed" in reply and not reply.startswith("Error"), reply
     assert calls == [], f"повторний виклик скинув контекст усіх сесій: {calls}"
 
 
