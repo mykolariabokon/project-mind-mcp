@@ -384,3 +384,160 @@ def test_structure_cache_does_not_leak_between_roots(root_pair) -> None:
     assert "alpha_pkg" in first
     assert "beta_pkg" in second, f"кеш віддав структуру попереднього проєкту:\n{second}"
     assert "alpha_pkg" not in second
+
+
+# --- знахідки змагального проходу #8: крайові шляхи запуску й відмови ---------------
+
+
+@pytest.mark.timeout(400)
+def test_session_init_gives_the_same_refusal_for_every_foreign_path(http_server) -> None:
+    # Відмова замка не мусить відрізнятись для існуючої теки, неіснуючої й файлу:
+    # інакше сесія питає сервер «чи є там таке» про довільні шляхи поза коренем.
+    port, _root_a, root_b = http_server
+    (root_b / "secret.txt").write_text("x", encoding="utf-8")
+    foreign = [root_b, root_b / "no-such-dir", root_b / "secret.txt"]
+    session = _open_session(port)
+    try:
+        replies = [session.call("session_init", project_path=str(p)) for p in foreign]
+    finally:
+        session.close()
+    for path, reply in zip(foreign, replies, strict=True):
+        assert "fixed for this server" in reply, f"{path}: {reply}"
+        assert "does not exist" not in reply and "not a directory" not in reply, f"{path}: {reply}"
+    assert not (root_b / ".ai").exists()
+
+
+def _start_http(args: list[str], cwd: Path, extra_env: dict[str, str] | None = None):
+    env = _server_env()
+    env.update(extra_env or {})
+    try:
+        return subprocess.run(
+            [sys.executable, str(ROOT / "mcp_server.py"), "--transport", "streamable-http"]
+            + ["--port", str(_free_port())]
+            + args,
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"сервер стартував (слухає порт) з непридатним --project-root {args}")
+
+
+@pytest.mark.timeout(400)
+@pytest.mark.parametrize(
+    "spelling",
+    ["missing", "missing_equals", "empty", "empty_equals", "no_value", "is_a_file"],
+)
+def test_refused_http_start_leaves_no_trace_in_the_working_directory(
+    tmp_path: Path, spelling: str
+) -> None:
+    cwd = tmp_path / "somewhere_else"
+    cwd.mkdir()
+    # Куди впаде автовизначення кореня, коли --project-root непридатний: саме там,
+    # а не в cwd, раніше з'являлась тека .ai.
+    fallback = tmp_path / "fallback_root"
+    fallback.mkdir()
+    a_file = tmp_path / "a_file.txt"
+    a_file.write_text("x", encoding="utf-8")
+    missing = str(tmp_path / "no_such_project")
+    args = {
+        "missing": ["--project-root", missing],
+        "missing_equals": [f"--project-root={missing}"],
+        "empty": ["--project-root", ""],
+        "empty_equals": ["--project-root="],
+        "no_value": ["--project-root"],
+        "is_a_file": ["--project-root", str(a_file)],
+    }[spelling]
+
+    proc = _start_http(args, cwd, {"WORKSPACE_FOLDER": str(fallback)})
+
+    assert proc.returncode != 0, (proc.stdout + proc.stderr)[-1500:]
+    for stray in (cwd / ".ai", fallback / ".ai"):
+        assert not stray.exists(), f"відмовлений старт створив {stray}"
+
+
+@pytest.mark.timeout(200)
+def test_equals_spelling_picks_the_requested_root_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    # config.find_project_root розумів лише `--project-root X`; запис `=X` падав у
+    # WORKSPACE_FOLDER, і логер встигав створити .ai/ у теці, якої ніхто не просив.
+    wanted = tmp_path / "wanted"
+    other = tmp_path / "other"
+    wanted.mkdir()
+    other.mkdir()
+    code = "import config, sys; print('ROOT=' + str(config.PROJECT_ROOT)); import mcp_server"
+    env = _server_env()
+    env["WORKSPACE_FOLDER"] = str(other)
+    env["PYTHONPATH"] = str(ROOT)
+    proc = subprocess.run(
+        [sys.executable, "-c", code, f"--project-root={wanted}"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=150,
+    )
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    assert f"ROOT={wanted.resolve()}" in proc.stdout, proc.stdout
+    assert not (other / ".ai").exists(), "побічний ефект у WORKSPACE_FOLDER, якого не просили"
+
+
+def test_locked_session_init_refuses_a_missing_path_with_the_lock_message(
+    root_pair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mcp_server
+
+    root_a, root_b = root_pair
+    config.lock_project_root()
+    calls = _forbid_side_effects(monkeypatch)
+
+    reply = mcp_server.session_init(project_path=str(root_b / "no-such-dir"))
+
+    assert "fixed for this server" in reply and str(root_a) in reply, reply
+    assert "does not exist" not in reply
+    assert calls == []
+
+
+@pytest.mark.parametrize("transport", ["streamable-http", "sse"])
+def test_any_shared_transport_locks_the_root_even_without_main(
+    root_pair, monkeypatch: pytest.MonkeyPatch, transport: str
+) -> None:
+    # Вбудовувач/`mcp run` викликає mcp.run(...) мимо main(): замок мусить стояти там,
+    # де сервер стає спільним, а не лише в одній точці входу.
+    import mcp_server
+
+    started: list[str] = []
+    monkeypatch.setattr(mcp_server, "_fastmcp_run", lambda t="stdio", *a, **k: started.append(t))
+    assert not config.is_project_root_locked()
+
+    mcp_server.mcp.run(transport=transport)
+
+    assert started == [transport]
+    assert config.is_project_root_locked()
+
+
+def test_stdio_run_does_not_lock_the_root(root_pair, monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcp_server
+
+    started: list[str] = []
+    monkeypatch.setattr(mcp_server, "_fastmcp_run", lambda t="stdio", *a, **k: started.append(t))
+
+    mcp_server.mcp.run()
+
+    assert started == ["stdio"]
+    assert not config.is_project_root_locked()
+
+
+@pytest.mark.parametrize("factory", ["streamable_http_app", "sse_app"])
+def test_asgi_apps_lock_the_root_when_they_are_built(root_pair, factory: str) -> None:
+    # uvicorn mcp_server:mcp.streamable_http_app — ще один вхід у спільний режим.
+    import mcp_server
+
+    assert not config.is_project_root_locked()
+
+    getattr(mcp_server.mcp, factory)()
+
+    assert config.is_project_root_locked()

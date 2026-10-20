@@ -7,6 +7,24 @@ from typing import Any
 _MCP_SERVER_DIR = Path(__file__).resolve().parent
 
 
+# Ставиться в find_project_root(), коли --project-root є в командному рядку, але
+# вказує на неіснуючий шлях, порожній рядок або не має значення. Логер тоді не
+# створює файл журналу в автовизначеному корені: відмовлений старт не мусить
+# лишати слід у теці, якої ніхто не просив.
+ROOT_ARG_REJECTED: str | None = None
+
+
+def _root_argument(argv: list[str]) -> tuple[bool, str | None]:
+    """Останнє `--project-root X` або `--project-root=X` (так само, як argparse): (є, значення)."""
+    present, value = False, None
+    for i, arg in enumerate(argv):
+        if arg == "--project-root":
+            present, value = True, (argv[i + 1] if i + 1 < len(argv) else None)
+        elif arg.startswith("--project-root="):
+            present, value = True, arg.split("=", 1)[1]
+    return present, value
+
+
 def find_project_root() -> Path:
     """
     Intelligently finds the project root directory.
@@ -21,11 +39,12 @@ def find_project_root() -> Path:
     Returns:
         Path to project root directory
     """
-    for i, arg in enumerate(sys.argv):
-        if arg == "--project-root" and i + 1 < len(sys.argv):
-            project_path = Path(sys.argv[i + 1]).resolve()
-            if project_path.exists():
-                return project_path
+    global ROOT_ARG_REJECTED
+    present, value = _root_argument(sys.argv)
+    if present:
+        if value and Path(value).resolve().exists():
+            return Path(value).resolve()
+        ROOT_ARG_REJECTED = repr(value)
 
     for env_var in ["WORKSPACE_FOLDER", "PROJECT_ROOT", "PROJECT_PATH"]:
         if env_path := os.getenv(env_var):

@@ -184,6 +184,39 @@ def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable
 
 mcp.tool = _threaded_tool  # type: ignore[method-assign]
 
+# ---------------------------------------------------------------------------
+# Корінь проєкту фіксується там, де сервер стає спільним
+# ---------------------------------------------------------------------------
+# main() фіксує корінь для --transport streamable-http, але сервер можна підняти й
+# повз main(): `mcp run`, `mcp dev`, власний вбудовувач (mcp.run("streamable-http")),
+# ASGI-хост (uvicorn ... mcp.streamable_http_app). Замок має стояти на самих входах у
+# нерозділений-на-сесії режим, а не лише в одній точці запуску. stdio — один клієнт
+# на процес, тож його не чіпаємо.
+_fastmcp_run = mcp.run
+_fastmcp_streamable_http_app = mcp.streamable_http_app
+_fastmcp_sse_app = mcp.sse_app
+
+
+def _run_locking_shared_transports(transport: Any = "stdio", *args: Any, **kwargs: Any) -> Any:
+    if transport != "stdio":
+        config.lock_project_root()
+    return _fastmcp_run(transport, *args, **kwargs)
+
+
+def _streamable_http_app_locking_root(*args: Any, **kwargs: Any) -> Any:
+    config.lock_project_root()
+    return _fastmcp_streamable_http_app(*args, **kwargs)
+
+
+def _sse_app_locking_root(*args: Any, **kwargs: Any) -> Any:
+    config.lock_project_root()
+    return _fastmcp_sse_app(*args, **kwargs)
+
+
+mcp.run = _run_locking_shared_transports  # type: ignore[method-assign]
+mcp.streamable_http_app = _streamable_http_app_locking_root  # type: ignore[method-assign]
+mcp.sse_app = _sse_app_locking_root  # type: ignore[method-assign]
+
 
 def _check_model_loaded() -> str | None:
     """Ensures the embedding model is loaded, initializing it if needed.
@@ -583,6 +616,10 @@ def session_init(project_path: str = "") -> str:
 
     if project_path and project_path.strip():
         target = Path(project_path).expanduser().resolve()
+        if config.is_project_root_locked() and target != config.PROJECT_ROOT:
+            # Раніше за перевірки існування: інакше відповідь розрізняє «немає такої теки»,
+            # «це файл» і «замок», і сесія вивідує, що лежить поза коренем.
+            return _root_locked_reply(target)
         if not target.exists():
             return f"Error: project_path does not exist: {project_path}"
         if not target.is_dir():
@@ -3937,11 +3974,13 @@ def fix_project_root_for_http(args: argparse.Namespace) -> Path:
     directory aborts the start — `config.find_project_root` would silently fall
     back to the working directory, and a locked wrong project is worse than none.
     """
-    if args.project_root:
-        requested = Path(args.project_root).expanduser().resolve()
-        if not requested.is_dir():
+    if args.project_root is not None:
+        # Порожній рядок — теж «просили, але непридатне»: Path("") став би поточною текою.
+        text = args.project_root.strip()
+        requested = Path(text).expanduser().resolve() if text else None
+        if requested is None or not requested.is_dir():
             sys.stderr.write(
-                f"projectmind: --project-root {requested} is not an existing directory; "
+                f'projectmind: --project-root "{args.project_root}" is not an existing directory; '
                 "refusing to start streamable-http with an unknown project root\n"
             )
             raise SystemExit(2)
