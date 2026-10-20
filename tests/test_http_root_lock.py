@@ -682,3 +682,33 @@ def test_http_start_follows_the_verdict_of_config_not_only_of_argparse(root_pair
 
     assert exc.value.code not in (0, None)
     assert not config.is_project_root_locked()
+
+
+def test_environment_root_that_is_a_file_is_not_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Той самий розрив exists()/is_dir(), що й для прапорця, але для змінних середовища.
+    a_file = tmp_path / "not_a_dir.txt"
+    a_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["projectmind"])
+    for name in ("WORKSPACE_FOLDER", "PROJECT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PROJECT_ROOT", str(a_file))
+
+    assert config.find_project_root() != a_file.resolve()
+
+
+def test_http_start_refuses_to_lock_a_root_that_is_not_a_directory(root_pair) -> None:
+    import mcp_server
+
+    root_a, _root_b = root_pair
+    a_file = root_a / "not_a_dir.txt"
+    a_file.write_text("x", encoding="utf-8")
+    config.PROJECT_ROOT = a_file  # те, що дав би будь-який шлях автовизначення
+    args = mcp_server.parse_cli_args(["--transport", "streamable-http"])
+
+    with pytest.raises(SystemExit) as exc:
+        mcp_server.fix_project_root_for_http(args)
+
+    assert exc.value.code not in (0, None)
+    assert not config.is_project_root_locked()

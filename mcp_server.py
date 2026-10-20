@@ -4025,6 +4025,14 @@ def fix_project_root_for_http(args: argparse.Namespace) -> Path:
             "streamable-http без --project-root: корінь визначено автоматично "
             f"({config.PROJECT_ROOT}) і зафіксовано"
         )
+    if not config.PROJECT_ROOT.is_dir():
+        # Кінцева страховка незалежно від того, звідки взявся корінь (аргумент, змінна
+        # середовища, автовизначення): фіксувати можна лише існуючу теку.
+        sys.stderr.write(
+            f'projectmind: project root "{config.PROJECT_ROOT}" is not an existing directory; '
+            "refusing to start streamable-http with an unknown project root\n"
+        )
+        raise SystemExit(2)
     root = config.lock_project_root()
     log(f"streamable-http: корінь проєкту зафіксований: {root}")
     return root

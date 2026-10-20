@@ -54,7 +54,7 @@ def find_project_root() -> Path:
     for env_var in ["WORKSPACE_FOLDER", "PROJECT_ROOT", "PROJECT_PATH"]:
         if env_path := os.getenv(env_var):
             project_path = Path(env_path).resolve()
-            if project_path.exists():
+            if project_path.is_dir():
                 return project_path
 
     try:
