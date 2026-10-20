@@ -638,3 +638,19 @@ def test_tilde_in_project_root_is_expanded_the_same_way_in_config_and_in_http_fi
 
     assert found == (home / "proj").resolve()
     assert config.ROOT_ARG_REJECTED is None
+
+
+def test_a_file_given_as_project_root_is_rejected_not_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # config приймав будь-який існуючий шлях, а set_project_root і http-фіксація — лише теку:
+    # у stdio файл мовчки ставав коренем без жодного попередження.
+    a_file = tmp_path / "not_a_dir.txt"
+    a_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["projectmind", "--project-root", str(a_file)])
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", None)
+
+    found = config.find_project_root()
+
+    assert found != a_file.resolve()
+    assert config.ROOT_ARG_REJECTED is not None

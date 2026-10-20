@@ -44,7 +44,7 @@ def find_project_root() -> Path:
     if present:
         text = (value or "").strip()
         candidate = Path(text).expanduser().resolve() if text else None
-        if candidate is not None and candidate.exists():
+        if candidate is not None and candidate.is_dir():
             return candidate
         ROOT_ARG_REJECTED = repr(value)
 
