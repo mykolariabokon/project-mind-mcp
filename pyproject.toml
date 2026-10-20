@@ -53,6 +53,9 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
+    # tests/test_release_metadata.py збирає колесо без ізоляції: потрібен setuptools із
+    # вбудованим bdist_wheel (venv на Python 3.12 його не містить).
+    "setuptools>=70.1",
 ]
 
 [project.urls]
