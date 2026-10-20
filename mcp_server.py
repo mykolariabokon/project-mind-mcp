@@ -3810,14 +3810,20 @@ def _short_description(text: str | None) -> str:
 
 
 def resolve_tool_profile() -> str:
-    """Профіль із середовища. Невідоме значення — full, з записом у журнал."""
+    """Профіль із середовища. Невідоме значення — lean (менше поверхні), з записом у журнал.
+
+    Раніше невідоме значення відкривало full: одруківка `leam` мовчки повертала всі
+    56 інструментів, зокрема ті, що змінюють стан для всіх сесій.
+    """
     raw = (os.environ.get(TOOL_PROFILE_ENV) or "").strip().lower()
     if raw in ("", TOOL_PROFILE_FULL):
         return TOOL_PROFILE_FULL
     if raw == TOOL_PROFILE_LEAN:
         return TOOL_PROFILE_LEAN
-    log(f"{TOOL_PROFILE_ENV}={raw!r} невідомий; діє full")
-    return TOOL_PROFILE_FULL
+    message = f"{TOOL_PROFILE_ENV}={raw!r} невідомий; діє lean (дозволені: full, lean)"
+    log(message)
+    sys.stderr.write(f"projectmind: {message}\n")
+    return TOOL_PROFILE_LEAN
 
 
 def apply_tool_profile(profile: str | None = None) -> str:
@@ -3887,6 +3893,12 @@ def main() -> None:
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
+
+
+# Профіль діє за будь-якого способу запуску, а не лише з main(): `mcp run`, `mcp dev` і
+# вбудовувачі беруть об'єкт `mcp` після імпорту, і без цього рядка lean там мовчки не діяв.
+# Повторний виклик з main() нічого не змінює.
+apply_tool_profile()
 
 
 if __name__ == "__main__":

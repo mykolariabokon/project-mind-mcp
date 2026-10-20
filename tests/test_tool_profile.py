@@ -111,8 +111,38 @@ def test_lean_descriptions_are_shorter_than_full(full_probe):
     assert lean["schema_chars"] < full_probe["schema_chars"]
 
 
-def test_unknown_profile_falls_back_to_full():
-    assert _probe("bogus")["count"] == 56
+def test_unknown_profile_fails_closed_to_lean():
+    # Одруківка в змінній не має відкривати всі 56 інструментів (R-007): невідоме = lean.
+    probe = _probe("bogus")
+    assert probe["count"] == 16
+    assert "set_project_root" not in probe["names"]
+    assert _probe("leam")["count"] == 16
+
+
+def test_lean_applies_without_main_when_module_is_only_imported():
+    # `mcp run`/`mcp dev` та вбудовувачі беруть об'єкт mcp після імпорту, main() не викликається.
+    code = "\n".join(
+        [
+            "import asyncio, json, os, sys",
+            "os.environ['PROJECTMIND_TOOL_PROFILE'] = 'lean'",
+            "sys.path.insert(0, sys.argv[1])",
+            "import mcp_server as m",
+            "names = sorted(t.name for t in asyncio.run(m.mcp.list_tools()))",
+            "print(json.dumps(names))",
+        ]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(ROOT)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=240,
+    )
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    names = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert len(names) == 16
+    assert "set_project_root" not in names
 
 
 def test_lean_has_no_set_project_root():
