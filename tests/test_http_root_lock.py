@@ -620,3 +620,21 @@ def test_nothing_is_reported_when_the_project_root_was_fine(
     mcp_server.report_rejected_root_argument()
 
     assert capsys.readouterr().err == ""
+
+
+def test_tilde_in_project_root_is_expanded_the_same_way_in_config_and_in_http_fix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fix_project_root_for_http розкривав `~`, а config — ні: сервер працював з правильним
+    # коренем, а health казав, що аргумент «проігноровано».
+    home = tmp_path / "home"
+    (home / "proj").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(sys, "argv", ["projectmind", "--project-root", "~/proj"])
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", None)
+
+    found = config.find_project_root()
+
+    assert found == (home / "proj").resolve()
+    assert config.ROOT_ARG_REJECTED is None

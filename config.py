@@ -43,8 +43,9 @@ def find_project_root() -> Path:
     present, value = _root_argument(sys.argv)
     if present:
         text = (value or "").strip()
-        if text and Path(text).resolve().exists():
-            return Path(text).resolve()
+        candidate = Path(text).expanduser().resolve() if text else None
+        if candidate is not None and candidate.exists():
+            return candidate
         ROOT_ARG_REJECTED = repr(value)
 
     for env_var in ["WORKSPACE_FOLDER", "PROJECT_ROOT", "PROJECT_PATH"]:
