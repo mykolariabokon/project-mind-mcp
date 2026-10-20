@@ -98,9 +98,9 @@ def test_a_stuck_section_logs_slow_with_the_stack_of_the_stuck_thread(log: _Capt
         assert started.wait(10)
         time.sleep(0.3)
 
-        reported = timing.check_slow_sections()
+        # Фоновий сторож міг відписати раніше за цей явний виклик — важливо, що рядок один.
+        timing.check_slow_sections()
 
-        assert reported == 1
         slow = [m for m in log.messages(logging.WARNING) if m.startswith("SLOW unit.stuck")]
         assert len(slow) == 1, log.messages()
         assert "thread=pm-test-stuck" in slow[0]
