@@ -6,6 +6,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic as time_monotonic
 from time import time
 from typing import Any
 
@@ -27,6 +28,8 @@ from context import get_context, reset_context
 from exceptions import GitError
 from git_utils import CommitInfo, GitRepository
 from logger import setup_logger
+from timing import format_report as _timing_report
+from timing import timed
 
 logger = setup_logger()
 
@@ -144,6 +147,8 @@ mcp = FastMCP("ProjectMind")
 # with it. The decorator returns the *original* sync function, so direct calls
 # (tests, other modules, `run_index.py`) keep working unchanged.
 _register_tool = mcp.tool
+# A tool that has not returned after this long is logged (WARNING + thread stack).
+TOOL_SLOW_SECONDS = 60.0
 
 
 def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable]:
@@ -156,7 +161,20 @@ def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable
 
         @functools.wraps(fn)
         async def async_tool(*args: Any, **kwargs: Any) -> Any:
-            return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+            queued_at = time_monotonic()
+
+            def run() -> Any:
+                # `queued` is the wait for a free worker thread; the section itself
+                # is the tool body. A call that goes quiet shows up in the log as
+                # SLOW with the stack of the thread it is stuck in.
+                with timed(
+                    f"tool.{fn.__name__}",
+                    warn_after=TOOL_SLOW_SECONDS,
+                    queued=f"{time_monotonic() - queued_at:.2f}s",
+                ):
+                    return fn(*args, **kwargs)
+
+            return await anyio.to_thread.run_sync(run)
 
         register(async_tool)
         return fn
@@ -490,6 +508,7 @@ def health() -> str:
         f"- **Vector index**: {('empty' if chunks == 0 else f'{chunks} chunks') if chunks is not None else 'not initialized'}",
         f"- **Index ignore file**: `{resolve_index_ignore_file()}`",
         f"- **Symbol graph**: {_symbol_graph_status()}",
+        "- **Timings** (log lines `TIMING` / `SLOW`):\n" + _timing_report(),
     ]
     bg_warnings = _background_index_warnings()
     if bg_warnings:

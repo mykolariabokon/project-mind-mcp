@@ -95,6 +95,7 @@ py-modules = [
     "context",
     "code_intelligence",
     "warmup",
+    "timing",
 ]
 
 [tool.black]

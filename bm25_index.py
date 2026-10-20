@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from logger import get_logger
+from timing import timed
 
 logger = get_logger()
 
@@ -62,15 +63,17 @@ class BM25Index:
 
     def build(self, ids: list[str], texts: list[str], metadatas: list[dict[str, Any]]) -> None:
         try:
-            from rank_bm25 import BM25Okapi
+            with timed("bm25.import rank_bm25"):
+                from rank_bm25 import BM25Okapi
 
             # Build everything into locals first, then swap under the lock so
             # a failed build or concurrent search never sees mismatched arrays.
-            new_ids = list(ids)
-            new_texts = list(texts)
-            new_metas = list(metadatas)
-            tokenized = [t.lower().split() for t in new_texts]
-            new_bm25 = BM25Okapi(tokenized) if tokenized else None
+            with timed("bm25.build", docs=len(ids)):
+                new_ids = list(ids)
+                new_texts = list(texts)
+                new_metas = list(metadatas)
+                tokenized = [t.lower().split() for t in new_texts]
+                new_bm25 = BM25Okapi(tokenized) if tokenized else None
 
             with self._lock:
                 self._ids = new_ids
@@ -196,7 +199,7 @@ class BM25Index:
         if not self.persist_path.exists():
             return False
         try:
-            with open(self.persist_path, encoding="utf-8") as f:
+            with timed("bm25.load"), open(self.persist_path, encoding="utf-8") as f:
                 data = json.load(f)
             ids = data["ids"]
             texts = data["texts"]
