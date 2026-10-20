@@ -45,7 +45,7 @@ def _parse_mcp_body(response: httpx.Response) -> dict:
     if "text/event-stream" in response.headers.get("content-type", ""):
         for line in response.text.splitlines():
             if line.startswith("data:"):
-                return json.loads(line[len("data:"):].strip())
+                return json.loads(line[len("data:") :].strip())
         raise AssertionError(f"SSE без data-рядка: {response.text[:500]}")
     return response.json()
 
@@ -100,7 +100,6 @@ def test_streamable_http_initialize_round_trip():
 
 
 def test_default_host_is_loopback():
-    import argparse
 
     import mcp_server
 

@@ -36,7 +36,9 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
         symbol_graph._cached_graph, symbol_graph._cache_path = original_cache
 
 
-def test_warm_cache_sees_file_created_after_build(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_warm_cache_sees_file_created_after_build(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Перевірка кешу без паузи: інакше тест перевіряв би лише вікно throttle, а не сам фікс.
     monkeypatch.setattr(symbol_graph, "STALE_RECHECK_SECONDS", 0.0, raising=False)
 
@@ -51,10 +53,14 @@ def test_warm_cache_sees_file_created_after_build(project: Path, monkeypatch: py
 
     # Без скидання _cached_graph: саме теплий шлях має побачити новий символ.
     graph = symbol_graph.get_or_build_symbol_graph()
-    assert graph.defs_of("brand_new_beta"), "теплий граф мусить побачити файл, створений після побудови"
+    assert graph.defs_of(
+        "brand_new_beta"
+    ), "теплий граф мусить побачити файл, створений після побудови"
 
 
-def test_warm_cache_does_not_rebuild_without_new_files(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_warm_cache_does_not_rebuild_without_new_files(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Страж: перевірка застарілості не має перебудовувати граф, коли нових файлів немає.
     monkeypatch.setattr(symbol_graph, "STALE_RECHECK_SECONDS", 0.0, raising=False)
     calls = {"n": 0}

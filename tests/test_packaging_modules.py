@@ -12,8 +12,12 @@ ImportError на першому ж шляху, що його імпортує (�
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: tomllib з'явився в 3.11
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,9 +60,9 @@ def test_every_imported_product_module_is_packaged() -> None:
     imported = _imported_top_level_names()
     declared = _declared_py_modules()
     missing = sorted(imported - declared)
-    assert not missing, (
-        f"Модулі імпортуються пакетом, але відсутні в py-modules (pyproject.toml): {missing}"
-    )
+    assert (
+        not missing
+    ), f"Модулі імпортуються пакетом, але відсутні в py-modules (pyproject.toml): {missing}"
 
 
 def test_every_declared_py_module_exists() -> None:

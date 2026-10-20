@@ -3777,24 +3777,26 @@ def _ensure_default_indexignore() -> None:
 TOOL_PROFILE_ENV = "PROJECTMIND_TOOL_PROFILE"
 TOOL_PROFILE_LEAN = "lean"
 TOOL_PROFILE_FULL = "full"
-LEAN_TOOL_NAMES = frozenset({
-    "search_codebase",
-    "find_symbol",
-    "get_symbol_relations",
-    "get_file_summary",
-    "get_file_relations",
-    "explore_directory",
-    "get_project_overview",
-    "search_memory",
-    "read_memory",
-    "get_index_stats",
-    "get_index_progress",
-    "health",
-    "search_for_errors",
-    "search_for_feature",
-    "index_changed_files",
-    "index_codebase",
-})
+LEAN_TOOL_NAMES = frozenset(
+    {
+        "search_codebase",
+        "find_symbol",
+        "get_symbol_relations",
+        "get_file_summary",
+        "get_file_relations",
+        "explore_directory",
+        "get_project_overview",
+        "search_memory",
+        "read_memory",
+        "get_index_stats",
+        "get_index_progress",
+        "health",
+        "search_for_errors",
+        "search_for_feature",
+        "index_changed_files",
+        "index_codebase",
+    }
+)
 LEAN_DESCRIPTION_LIMIT = 200
 
 
