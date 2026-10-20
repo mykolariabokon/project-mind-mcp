@@ -17,6 +17,9 @@ ROOT_ARG_REJECTED: str | None = None
 def _root_argument(argv: list[str]) -> tuple[bool, str | None]:
     """Останнє `--project-root X` або `--project-root=X` (так само, як argparse): (є, значення)."""
     present, value = False, None
+    if "--" in argv:
+        # argparse leaves everything after a bare double dash positional; so must we.
+        argv = argv[: argv.index("--")]
     for i, arg in enumerate(argv):
         if arg == "--project-root":
             present, value = True, (argv[i + 1] if i + 1 < len(argv) else None)

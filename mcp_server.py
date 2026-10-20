@@ -3999,6 +3999,14 @@ def fix_project_root_for_http(args: argparse.Namespace) -> Path:
     directory aborts the start — `config.find_project_root` would silently fall
     back to the working directory, and a locked wrong project is worse than none.
     """
+    if config.ROOT_ARG_REJECTED is not None and args.project_root is None:
+        # config побачив --project-root і відхилив його, а argparse нічого не бачить: двох
+        # думок про один прапорець бути не може, тож відмовляємо за висновком config.
+        sys.stderr.write(
+            f"projectmind: --project-root {config.ROOT_ARG_REJECTED} is not an existing "
+            "directory; refusing to start streamable-http with an unknown project root\n"
+        )
+        raise SystemExit(2)
     if args.project_root is not None:
         # Порожній рядок — теж «просили, але непридатне»: Path("") став би поточною текою.
         text = args.project_root.strip()

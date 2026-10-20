@@ -654,3 +654,31 @@ def test_a_file_given_as_project_root_is_rejected_not_adopted(
 
     assert found != a_file.resolve()
     assert config.ROOT_ARG_REJECTED is not None
+
+
+def test_config_stops_reading_arguments_at_the_double_dash() -> None:
+    # argparse лишає все після `--` позиційним; config читав далі й бачив прапор, якого
+    # argparse не бачив, — два розбирачі одного прапорця давали різні корені.
+    assert config._root_argument(["x", "--", "--project-root", "y"]) == (False, None)
+    assert config._root_argument(["x", "--project-root", "y", "--", "--project-root", "z"]) == (
+        True,
+        "y",
+    )
+
+
+def test_http_start_follows_the_verdict_of_config_not_only_of_argparse(root_pair) -> None:
+    # Якщо config побачив --project-root і відхилив його, а argparse нічого не бачить,
+    # http-старт не може мовчки зафіксувати автовизначений корінь.
+    import mcp_server
+
+    args = mcp_server.parse_cli_args(["--transport", "streamable-http"])
+    assert args.project_root is None
+    config.ROOT_ARG_REJECTED = "'/not/a/dir'"
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mcp_server.fix_project_root_for_http(args)
+    finally:
+        config.ROOT_ARG_REJECTED = None
+
+    assert exc.value.code not in (0, None)
+    assert not config.is_project_root_locked()
