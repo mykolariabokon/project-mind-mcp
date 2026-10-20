@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 
 STUB = (
@@ -34,6 +36,8 @@ PROBE = (
 )
 
 
+# Холодний прогрів важких імпортів сам триває 30–40 с, тож типова стеля 30 с червонить тест хибно.
+@pytest.mark.timeout(300)
 def test_rank_bm25_is_imported_on_main_thread_by_warmup(tmp_path: Path) -> None:
     (tmp_path / "rank_bm25.py").write_text(STUB, encoding="utf-8")
     env = dict(os.environ)

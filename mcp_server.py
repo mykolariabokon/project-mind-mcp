@@ -3777,25 +3777,26 @@ def _ensure_default_indexignore() -> None:
 TOOL_PROFILE_ENV = "PROJECTMIND_TOOL_PROFILE"
 TOOL_PROFILE_LEAN = "lean"
 TOOL_PROFILE_FULL = "full"
-LEAN_TOOL_NAMES = frozenset({
-    "search_codebase",
-    "find_symbol",
-    "get_symbol_relations",
-    "get_file_summary",
-    "get_file_relations",
-    "explore_directory",
-    "get_project_overview",
-    "search_memory",
-    "read_memory",
-    "get_index_stats",
-    "get_index_progress",
-    "health",
-    "search_for_errors",
-    "search_for_feature",
-    "index_changed_files",
-    "index_codebase",
-    "set_project_root",
-})
+LEAN_TOOL_NAMES = frozenset(
+    {
+        "search_codebase",
+        "find_symbol",
+        "get_symbol_relations",
+        "get_file_summary",
+        "get_file_relations",
+        "explore_directory",
+        "get_project_overview",
+        "search_memory",
+        "read_memory",
+        "get_index_stats",
+        "get_index_progress",
+        "health",
+        "search_for_errors",
+        "search_for_feature",
+        "index_changed_files",
+        "index_codebase",
+    }
+)
 LEAN_DESCRIPTION_LIMIT = 200
 
 
@@ -3809,14 +3810,20 @@ def _short_description(text: str | None) -> str:
 
 
 def resolve_tool_profile() -> str:
-    """Профіль із середовища. Невідоме значення — full, з записом у журнал."""
+    """Профіль із середовища. Невідоме значення — lean (менше поверхні), з записом у журнал.
+
+    Раніше невідоме значення відкривало full: одруківка `leam` мовчки повертала всі
+    56 інструментів, зокрема ті, що змінюють стан для всіх сесій.
+    """
     raw = (os.environ.get(TOOL_PROFILE_ENV) or "").strip().lower()
     if raw in ("", TOOL_PROFILE_FULL):
         return TOOL_PROFILE_FULL
     if raw == TOOL_PROFILE_LEAN:
         return TOOL_PROFILE_LEAN
-    log(f"{TOOL_PROFILE_ENV}={raw!r} невідомий; діє full")
-    return TOOL_PROFILE_FULL
+    message = f"{TOOL_PROFILE_ENV}={raw!r} невідомий; діє lean (дозволені: full, lean)"
+    log(message)
+    sys.stderr.write(f"projectmind: {message}\n")
+    return TOOL_PROFILE_LEAN
 
 
 def apply_tool_profile(profile: str | None = None) -> str:
@@ -3886,6 +3893,12 @@ def main() -> None:
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
+
+
+# Профіль діє за будь-якого способу запуску, а не лише з main(): `mcp run`, `mcp dev` і
+# вбудовувачі беруть об'єкт `mcp` після імпорту, і без цього рядка lean там мовчки не діяв.
+# Повторний виклик з main() нічого не змінює.
+apply_tool_profile()
 
 
 if __name__ == "__main__":
