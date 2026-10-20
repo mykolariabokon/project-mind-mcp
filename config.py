@@ -105,9 +105,35 @@ def resolve_index_ignore_file() -> Path:
     return INDEX_IGNORE_FILE
 
 
+class ProjectRootLockedError(RuntimeError):
+    """The project root was fixed at startup and cannot be switched."""
+
+
+# Set by `lock_project_root()` in the shared (streamable-http) mode: one warm
+# server process serves many client sessions, and PROJECT_ROOT is process-wide,
+# so one session switching it would silently re-point every other session.
+_ROOT_LOCKED = False
+
+
+def lock_project_root() -> Path:
+    """Fix the current project root for the rest of the process's life."""
+    global _ROOT_LOCKED
+    _ROOT_LOCKED = True
+    return PROJECT_ROOT
+
+
+def is_project_root_locked() -> bool:
+    return _ROOT_LOCKED
+
+
 def reconfigure(new_root: Path) -> None:
     global PROJECT_ROOT, AI_DIR, MEMORY_FILE, VECTOR_STORE_DIR
     global INDEX_IGNORE_FILE, INDEX_METADATA_FILE, BM25_INDEX_PATH, MEMORY_HISTORY_DIR, LOG_FILE
+    if _ROOT_LOCKED and new_root.resolve() != PROJECT_ROOT:
+        raise ProjectRootLockedError(
+            f"Project root is fixed at {PROJECT_ROOT} (set by --project-root); "
+            f"refusing to switch to {new_root}."
+        )
     PROJECT_ROOT = new_root.resolve()
     AI_DIR = PROJECT_ROOT / ".ai"
     MEMORY_FILE = AI_DIR / "memory.md"
