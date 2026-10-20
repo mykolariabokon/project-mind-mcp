@@ -7,6 +7,27 @@ from typing import Any
 _MCP_SERVER_DIR = Path(__file__).resolve().parent
 
 
+# Ставиться в find_project_root(), коли --project-root є в командному рядку, але
+# вказує на неіснуючий шлях, порожній рядок або не має значення. Логер тоді не
+# створює файл журналу в автовизначеному корені: відмовлений старт не мусить
+# лишати слід у теці, якої ніхто не просив.
+ROOT_ARG_REJECTED: str | None = None
+
+
+def _root_argument(argv: list[str]) -> tuple[bool, str | None]:
+    """Останнє `--project-root X` або `--project-root=X` (так само, як argparse): (є, значення)."""
+    present, value = False, None
+    if "--" in argv:
+        # argparse leaves everything after a bare double dash positional; so must we.
+        argv = argv[: argv.index("--")]
+    for i, arg in enumerate(argv):
+        if arg == "--project-root":
+            present, value = True, (argv[i + 1] if i + 1 < len(argv) else None)
+        elif arg.startswith("--project-root="):
+            present, value = True, arg.split("=", 1)[1]
+    return present, value
+
+
 def find_project_root() -> Path:
     """
     Intelligently finds the project root directory.
@@ -21,16 +42,19 @@ def find_project_root() -> Path:
     Returns:
         Path to project root directory
     """
-    for i, arg in enumerate(sys.argv):
-        if arg == "--project-root" and i + 1 < len(sys.argv):
-            project_path = Path(sys.argv[i + 1]).resolve()
-            if project_path.exists():
-                return project_path
+    global ROOT_ARG_REJECTED
+    present, value = _root_argument(sys.argv)
+    if present:
+        text = (value or "").strip()
+        candidate = Path(text).expanduser().resolve() if text else None
+        if candidate is not None and candidate.is_dir():
+            return candidate
+        ROOT_ARG_REJECTED = repr(value)
 
     for env_var in ["WORKSPACE_FOLDER", "PROJECT_ROOT", "PROJECT_PATH"]:
         if env_path := os.getenv(env_var):
             project_path = Path(env_path).resolve()
-            if project_path.exists():
+            if project_path.is_dir():
                 return project_path
 
     try:
@@ -105,9 +129,35 @@ def resolve_index_ignore_file() -> Path:
     return INDEX_IGNORE_FILE
 
 
+class ProjectRootLockedError(RuntimeError):
+    """The project root was fixed at startup and cannot be switched."""
+
+
+# Set by `lock_project_root()` in the shared (streamable-http) mode: one warm
+# server process serves many client sessions, and PROJECT_ROOT is process-wide,
+# so one session switching it would silently re-point every other session.
+_ROOT_LOCKED = False
+
+
+def lock_project_root() -> Path:
+    """Fix the current project root for the rest of the process's life."""
+    global _ROOT_LOCKED
+    _ROOT_LOCKED = True
+    return PROJECT_ROOT
+
+
+def is_project_root_locked() -> bool:
+    return _ROOT_LOCKED
+
+
 def reconfigure(new_root: Path) -> None:
     global PROJECT_ROOT, AI_DIR, MEMORY_FILE, VECTOR_STORE_DIR
     global INDEX_IGNORE_FILE, INDEX_METADATA_FILE, BM25_INDEX_PATH, MEMORY_HISTORY_DIR, LOG_FILE
+    if _ROOT_LOCKED and new_root.resolve() != PROJECT_ROOT:
+        raise ProjectRootLockedError(
+            f"Project root is fixed at {PROJECT_ROOT} (set by --project-root); "
+            f"refusing to switch to {new_root}."
+        )
     PROJECT_ROOT = new_root.resolve()
     AI_DIR = PROJECT_ROOT / ".ai"
     MEMORY_FILE = AI_DIR / "memory.md"

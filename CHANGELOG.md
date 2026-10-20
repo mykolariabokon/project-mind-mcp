@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.12.0] - 2026-10-20 THE PACKAGE STARTS, ONE WARM SERVER PER PROJECT
+
+0.11.0 on PyPI **does not start**: `No module named 'warmup'`. The module was
+imported by the server but missing from `py-modules`, so it never reached the
+wheel. This release is the fix, plus the changes the editor integration needed.
+
+### Fixed
+
+- **The wheel now ships every module the server imports.** `warmup` (and the new
+  `timing`) are in `py-modules`. `tests/test_packaging_modules.py` checks the list
+  against the imports; `tests/test_release_metadata.py` builds the wheel from a
+  clean copy of the tree and checks what is actually inside, the version against
+  this file, and the console-script entry points.
+- **The symbol graph sees files created after it was built.** The in-memory copy
+  was returned without any staleness check, so a long-lived server answered
+  "No symbols matching" for a file created minutes ago. The check is now made at
+  most every 5 s (`STALE_RECHECK_SECONDS`).
+- **One session can no longer re-point a shared server.** In `streamable-http`
+  mode the project root is fixed at startup by `--project-root`; `set_project_root`
+  and `session_init(project_path=<other>)` are refused with a message that names the
+  fixed root, before any side effect, and `config.reconfigure` raises once the root
+  is locked. A `--project-root` that is not a directory aborts the start instead of
+  silently falling back to the working directory. stdio behaves as before.
+- **`analyze_project_structure` cache was not tied to the project root** and returned
+  the previous project's structure for up to 5 minutes after a root change.
+- **The `lean` profile is applied however the server is started** (it used to be applied
+  only by `main()`), and an unknown `PROJECTMIND_TOOL_PROFILE` value now falls back
+  to `lean` rather than opening all 56 tools.
+
+### Added
+
+- `PROJECTMIND_TOOL_PROFILE=lean`: 16 of 56 tools with shortened descriptions
+  (`tools/list` ~38.6k -> ~8k characters). `set_project_root` is not in it.
+- `--transport streamable-http --host 127.0.0.1 --port N`: one warm server per project
+  instead of a new stdio process per turn.
+- `--project-root` is a documented CLI option (`--help`).
+- **Timing counters** (`timing.py`) for the cold-search stall that was reported but never
+  reproduced: import of `rank_bm25` / `symbol_graph` / `chromadb` / `sentence_transformers`
+  / `torch`, BM25 load and build, model load, and every tool call (with the wait for a
+  free worker thread) are logged as `TIMING <label> <seconds>` at INFO. A section that
+  stays open longer than the threshold logs `SLOW` at WARNING with
+  the stack of the thread that is stuck in it, repeated every 60 s while it lasts.
+  `health` lists the counters. Threshold: `PROJECTMIND_SLOW_SECTION_SECONDS` (default 20;
+  tool calls use 60).
+
+### Changed
+
+- CI is green again: ruff/black fixes, `tomli` fallback for Python 3.10 in the tests,
+  300 s ceiling for the cold-import test.
+
 ## [0.11.0] - 2026-08-09 ⏱️ THE SERVER STOPS FREEZING
 
 ### Fixed — the server stopped answering, permanently

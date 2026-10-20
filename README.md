@@ -311,7 +311,8 @@ PROJECTMIND_SYMBOL_GRAPH_MAX_FILES=8000
 PROJECTMIND_SYMBOL_GRAPH_BUDGET_SECONDS=300
 PROJECTMIND_TOOL_BUDGET_SECONDS=45
 PROJECTMIND_MODEL_IDLE_UNLOAD_SECONDS=3600
-PROJECTMIND_TOOL_PROFILE=full   # full (типово, 56 інструментів) | lean (17, без деструктивних)
+PROJECTMIND_TOOL_PROFILE=full   # full (типово, 56 інструментів) | lean (16, без деструктивних)
+PROJECTMIND_SLOW_SECTION_SECONDS=20   # поріг, після якого завислу секцію видно в журналі (див. «Лічильники часу»)
 ```
 
 `PROJECTMIND_TOOL_PROFILE=lean` реєструє лише ядро читання й пошуку
@@ -331,6 +332,31 @@ python mcp_server.py --transport streamable-http --host 127.0.0.1 --port 8000
 
 `--host` типово `127.0.0.1` (лише локальний доступ). Інша адреса відкриває
 сервер для мережі; робіть це свідомо.
+
+**Корінь проєкту в http-режимі зафіксований.** Один теплий процес обслуговує всі
+сесії, а корінь проєкту в ньому один, тож його задають аргументом
+`--project-root <тека>` і більше не змінюють:
+
+```bash
+projectmind-mcp --transport streamable-http --port 8000 --project-root /path/to/project
+```
+
+`set_project_root` і `session_init(project_path=<інший>)` у цьому режимі відмовляють
+повідомленням із назвою зафіксованого кореня (`session_init` з тим самим коренем
+працює). Неіснуючий `--project-root` зупиняє старт, а не підміняється поточною текою.
+Іншому проєкту — окремий сервер. У режимі stdio нічого не змінилось.
+
+### Лічильники часу
+
+Сервер пише в `.ai/projectmind.log` (рівень INFO) рядки
+`TIMING <мітка> <секунди> thread=<потік>`: імпорти `rank_bm25`, `symbol_graph`,
+`chromadb`, `sentence_transformers`, `torch`, завантаження й побудову BM25,
+завантаження моделі та кожен виклик інструмента (`tool.<ім'я>`, з часом очікування
+вільного потоку `queued=`). Якщо секція не закінчується довше за
+`PROJECTMIND_SLOW_SECTION_SECONDS` (типово 20 с; виклики інструментів — 60 с), у журнал
+іде `SLOW <мітка> ще триває …` зі **стеком потоку, що в ній застряг**, і повторюється
+раз на 60 с, доки секція жива. Так видно, де саме стоїть перший холодний пошук. Підсумок
+лічильників показує `health`.
 
 ### Ignore patterns
 
@@ -382,11 +408,26 @@ run_index.py            ← helper script for manual re-indexing
 
 Issues and PRs are welcome. This is an open project — built in the open, improved in the open.
 
+### Тестове середовище
+
+Тести ганяйте у власному віртуальному середовищі, а не в системному Python (у ньому
+немає залежностей). Потрібен Python 3.10–3.12:
+
 ```bash
-pip install -e ".[dev]"
-pytest tests/
-ruff check .
+# Windows                              # macOS/Linux
+py -3.12 -m venv .venv                 # python3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"     # .venv/bin/python -m pip install -e ".[dev]"
+
+.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider -o addopts=
+.venv\Scripts\ruff check .
+.venv\Scripts\black --check .
 ```
+
+Це те саме, що робить CI. Векторний стек `[vector]` для тестів не потрібен: без нього
+сервер працює в режимі лише BM25, і весь набір (282 тести) проходить. Холодний старт
+сервера займає десятки секунд, тому тести, що запускають справжній процес, мають власну
+стелю часу (`@pytest.mark.timeout`). У Python 3.12 `venv` не містить `setuptools`; він
+оголошений у `[dev]`, бо тест колеса збирає пакет без ізоляції.
 
 CI runs ruff, black, mypy and the unit suite on Python 3.10–3.12 (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 

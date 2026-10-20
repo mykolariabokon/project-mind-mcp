@@ -79,7 +79,8 @@ def setup_logger(name: str = "ProjectMind") -> logging.Logger:
     logger.handlers.clear()
 
     try:
-        _attach_file_handler(logger)
+        if config.ROOT_ARG_REJECTED is None:
+            _attach_file_handler(logger)
     except Exception as e:
         sys.stderr.write(f"Warning: Could not setup file logging: {e}\n")
 

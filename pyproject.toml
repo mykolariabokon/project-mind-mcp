@@ -1,6 +1,6 @@
 [project]
 name = "projectmind-mcp"
-version = "0.11.0"
+version = "0.12.0"
 description = "Give your AI coding assistant a brain: persistent memory, hybrid code search, AI-authored annotations, and an AST symbol graph — 100% local MCP server, no API keys."
 authors = [
     {name = "Mykola Riabokon"}
@@ -53,6 +53,9 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
+    # tests/test_release_metadata.py збирає колесо без ізоляції: потрібен setuptools із
+    # вбудованим bdist_wheel (venv на Python 3.12 його не містить).
+    "setuptools>=70.1",
 ]
 
 [project.urls]
@@ -95,6 +98,7 @@ py-modules = [
     "context",
     "code_intelligence",
     "warmup",
+    "timing",
 ]
 
 [tool.black]

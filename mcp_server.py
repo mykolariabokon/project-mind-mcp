@@ -6,6 +6,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic as time_monotonic
 from time import time
 from typing import Any
 
@@ -27,6 +28,8 @@ from context import get_context, reset_context
 from exceptions import GitError
 from git_utils import CommitInfo, GitRepository
 from logger import setup_logger
+from timing import format_report as _timing_report
+from timing import timed
 
 logger = setup_logger()
 
@@ -144,6 +147,8 @@ mcp = FastMCP("ProjectMind")
 # with it. The decorator returns the *original* sync function, so direct calls
 # (tests, other modules, `run_index.py`) keep working unchanged.
 _register_tool = mcp.tool
+# A tool that has not returned after this long is logged (WARNING + thread stack).
+TOOL_SLOW_SECONDS = 60.0
 
 
 def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable]:
@@ -156,7 +161,20 @@ def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable
 
         @functools.wraps(fn)
         async def async_tool(*args: Any, **kwargs: Any) -> Any:
-            return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+            queued_at = time_monotonic()
+
+            def run() -> Any:
+                # `queued` is the wait for a free worker thread; the section itself
+                # is the tool body. A call that goes quiet shows up in the log as
+                # SLOW with the stack of the thread it is stuck in.
+                with timed(
+                    f"tool.{fn.__name__}",
+                    warn_after=TOOL_SLOW_SECONDS,
+                    queued=f"{time_monotonic() - queued_at:.2f}s",
+                ):
+                    return fn(*args, **kwargs)
+
+            return await anyio.to_thread.run_sync(run)
 
         register(async_tool)
         return fn
@@ -165,6 +183,39 @@ def _threaded_tool(*dargs: Any, **dkwargs: Any) -> Callable[[Callable], Callable
 
 
 mcp.tool = _threaded_tool  # type: ignore[method-assign]
+
+# ---------------------------------------------------------------------------
+# Корінь проєкту фіксується там, де сервер стає спільним
+# ---------------------------------------------------------------------------
+# main() фіксує корінь для --transport streamable-http, але сервер можна підняти й
+# повз main(): `mcp run`, `mcp dev`, власний вбудовувач (mcp.run("streamable-http")),
+# ASGI-хост (uvicorn ... mcp.streamable_http_app). Замок має стояти на самих входах у
+# нерозділений-на-сесії режим, а не лише в одній точці запуску. stdio — один клієнт
+# на процес, тож його не чіпаємо.
+_fastmcp_run = mcp.run
+_fastmcp_streamable_http_app = mcp.streamable_http_app
+_fastmcp_sse_app = mcp.sse_app
+
+
+def _run_locking_shared_transports(transport: Any = "stdio", *args: Any, **kwargs: Any) -> Any:
+    if transport != "stdio":
+        config.lock_project_root()
+    return _fastmcp_run(transport, *args, **kwargs)
+
+
+def _streamable_http_app_locking_root(*args: Any, **kwargs: Any) -> Any:
+    config.lock_project_root()
+    return _fastmcp_streamable_http_app(*args, **kwargs)
+
+
+def _sse_app_locking_root(*args: Any, **kwargs: Any) -> Any:
+    config.lock_project_root()
+    return _fastmcp_sse_app(*args, **kwargs)
+
+
+mcp.run = _run_locking_shared_transports  # type: ignore[method-assign]
+mcp.streamable_http_app = _streamable_http_app_locking_root  # type: ignore[method-assign]
+mcp.sse_app = _sse_app_locking_root  # type: ignore[method-assign]
 
 
 def _check_model_loaded() -> str | None:
@@ -307,6 +358,25 @@ def _reset_indexing_state_for_new_root() -> None:
         pass
 
 
+def _root_locked_reply(requested: Path) -> str:
+    """Answer to an attempt to change the project root of a shared server."""
+    fixed = config.PROJECT_ROOT
+    if requested == fixed:
+        return (
+            f"Project root is fixed for this server: {fixed}. "
+            "It is already the requested root; nothing was changed."
+        )
+    # The requested path is deliberately NOT echoed: `Path.resolve()` normalizes
+    # case and follows junctions only for components that exist, so the echo told a
+    # session whether a path outside the root exists and where a link leads.
+    return (
+        f"Error: the project root is fixed for this server at {fixed} "
+        "(streamable-http serves every session from one process, so a session "
+        "cannot re-point it). To work on another project, start a separate "
+        "server with `--project-root <path>`."
+    )
+
+
 @mcp.tool()
 def set_project_root(path: str) -> str:
     """
@@ -321,6 +391,10 @@ def set_project_root(path: str) -> str:
     """
     global _startup_done
     target = Path(path).resolve()
+    if config.is_project_root_locked():
+        # Before any other check or side effect: the refusal must not touch the
+        # state the other sessions of this shared server are standing on.
+        return _root_locked_reply(target)
     if not target.exists():
         return f"Error: Path does not exist: {path}"
     if not target.is_dir():
@@ -464,11 +538,19 @@ def health() -> str:
         "# ProjectMind — Health",
         f"- **Version**: {version_str}",
         f"- **MCP server dir**: `{MCP_SERVER_DIR}`",
-        f"- **Project root**: `{root}`",
+        f"- **Project root**: `{root}`" + (" (fixed)" if config.is_project_root_locked() else ""),
+        *(
+            [
+                f"- ⚠️ `--project-root {config.ROOT_ARG_REJECTED}` was ignored (not an existing directory)"
+            ]
+            if config.ROOT_ARG_REJECTED is not None
+            else []
+        ),
         f"- **Memory file**: {'found' if memory_exists else 'missing'} (`{config.MEMORY_FILE}`)",
         f"- **Vector index**: {('empty' if chunks == 0 else f'{chunks} chunks') if chunks is not None else 'not initialized'}",
         f"- **Index ignore file**: `{resolve_index_ignore_file()}`",
         f"- **Symbol graph**: {_symbol_graph_status()}",
+        "- **Timings** (log lines `TIMING` / `SLOW`):\n" + _timing_report(),
     ]
     bg_warnings = _background_index_warnings()
     if bg_warnings:
@@ -543,21 +625,33 @@ def session_init(project_path: str = "") -> str:
 
     if project_path and project_path.strip():
         target = Path(project_path).expanduser().resolve()
+        if config.is_project_root_locked() and target != config.PROJECT_ROOT:
+            # Раніше за перевірки існування: інакше відповідь розрізняє «немає такої теки»,
+            # «це файл» і «замок», і сесія вивідує, що лежить поза коренем.
+            return _root_locked_reply(target)
         if not target.exists():
             return f"Error: project_path does not exist: {project_path}"
         if not target.is_dir():
             return f"Error: project_path is not a directory: {project_path}"
-        if target != config.PROJECT_ROOT:
-            cancel_note = _stop_background_indexing()
-            if cancel_note:
-                sections.append(cancel_note)
-        reconfigure(target)
-        reset_context()
-        _reset_indexing_state_for_new_root()
-        _startup_done = False
-        ensure_startup()
-        _ensure_default_indexignore()
-        sections.append(f"**Project root** set to: `{config.PROJECT_ROOT}`")
+        if config.is_project_root_locked():
+            if target != config.PROJECT_ROOT:
+                return _root_locked_reply(target)
+            # The same root again: nothing to switch, and resetting the context
+            # here would drop the warm model out from under the other sessions.
+            ensure_startup()
+            sections.append(f"**Project root** (fixed by --project-root): `{config.PROJECT_ROOT}`")
+        else:
+            if target != config.PROJECT_ROOT:
+                cancel_note = _stop_background_indexing()
+                if cancel_note:
+                    sections.append(cancel_note)
+            reconfigure(target)
+            reset_context()
+            _reset_indexing_state_for_new_root()
+            _startup_done = False
+            ensure_startup()
+            _ensure_default_indexignore()
+            sections.append(f"**Project root** set to: `{config.PROJECT_ROOT}`")
     else:
         ensure_startup()
         sections.append(
@@ -2868,22 +2962,27 @@ def extract_tech_stack() -> str:
 
 _structure_cache: str | None = None
 _structure_cache_time: float = 0.0
+_structure_cache_root: Path | None = None
 _structure_cache_lock = threading.Lock()
 STRUCTURE_CACHE_TTL = 300
 
 
 @mcp.tool()
 def analyze_project_structure() -> str:
-    global _structure_cache, _structure_cache_time
+    global _structure_cache, _structure_cache_time, _structure_cache_root
 
     current_time = time()
+    root = config.PROJECT_ROOT
 
     with _structure_cache_lock:
-        if _structure_cache and (current_time - _structure_cache_time) < STRUCTURE_CACHE_TTL:
+        if (
+            _structure_cache
+            and _structure_cache_root == root
+            and (current_time - _structure_cache_time) < STRUCTURE_CACHE_TTL
+        ):
             return _structure_cache
 
     try:
-        root = config.PROJECT_ROOT
 
         structure = []
         structure.append("# PROJECT STRUCTURE\n")
@@ -2955,6 +3054,7 @@ def analyze_project_structure() -> str:
         with _structure_cache_lock:
             _structure_cache = result
             _structure_cache_time = current_time
+            _structure_cache_root = root
 
         return result
     except Exception as e:
@@ -3849,7 +3949,11 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     Невідомі аргументи ігноруються (parse_known_args): попередня версія їх теж
     не відхиляла, а клієнти MCP іноді додають свої прапорці.
     """
-    parser = argparse.ArgumentParser(prog="projectmind", description="ProjectMind MCP-сервер")
+    # allow_abbrev=False: config.find_project_root() шукає лише повні `--project-root`
+    # й `--project-root=`; скорочення (`--project-r`) argparse приймав би, а config — ні.
+    parser = argparse.ArgumentParser(
+        prog="projectmind", description="ProjectMind MCP-сервер", allow_abbrev=False
+    )
     parser.add_argument(
         "--transport",
         choices=["stdio", "streamable-http"],
@@ -3864,13 +3968,83 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--port", type=int, default=8000, help="порт для streamable-http (типово 8000)"
     )
+    parser.add_argument(
+        "--project-root",
+        default=None,
+        help="корінь проєкту; у режимі streamable-http фіксується на весь час життя процесу",
+    )
     args, _unknown = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
     return args
+
+
+def report_rejected_root_argument() -> None:
+    """stdio лишає поведінку «непридатний --project-root → автовизначення», але не мовчки."""
+    if config.ROOT_ARG_REJECTED is None:
+        return
+    message = (
+        f"--project-root {config.ROOT_ARG_REJECTED} ignored (not an existing directory); "
+        f"using the auto-detected root {config.PROJECT_ROOT}"
+    )
+    log(message)
+    sys.stderr.write(f"projectmind: {message}\n")
+
+
+def fix_project_root_for_http(args: argparse.Namespace) -> Path:
+    """Fixes the project root of a shared (streamable-http) server for good.
+
+    One warm process serves every client session, so the root must not depend on
+    what any one session asks for. It comes from `--project-root` (or, failing
+    that, from auto-detection, which is logged) and is then locked in `config`:
+    every later `reconfigure` raises. A `--project-root` that is not an existing
+    directory aborts the start — `config.find_project_root` would silently fall
+    back to the working directory, and a locked wrong project is worse than none.
+    """
+    if config.ROOT_ARG_REJECTED is not None and args.project_root is None:
+        # config побачив --project-root і відхилив його, а argparse нічого не бачить: двох
+        # думок про один прапорець бути не може, тож відмовляємо за висновком config.
+        sys.stderr.write(
+            f"projectmind: --project-root {config.ROOT_ARG_REJECTED} is not an existing "
+            "directory; refusing to start streamable-http with an unknown project root\n"
+        )
+        raise SystemExit(2)
+    if args.project_root is not None:
+        # Порожній рядок — теж «просили, але непридатне»: Path("") став би поточною текою.
+        text = args.project_root.strip()
+        requested = Path(text).expanduser().resolve() if text else None
+        if requested is None or not requested.is_dir():
+            sys.stderr.write(
+                f'projectmind: --project-root "{args.project_root}" is not an existing directory; '
+                "refusing to start streamable-http with an unknown project root\n"
+            )
+            raise SystemExit(2)
+        if requested != config.PROJECT_ROOT:
+            # `config` reads only the `--project-root X` spelling; this covers `=X`.
+            reconfigure(requested)
+    else:
+        log(
+            "streamable-http без --project-root: корінь визначено автоматично "
+            f"({config.PROJECT_ROOT}) і зафіксовано"
+        )
+    if not config.PROJECT_ROOT.is_dir():
+        # Кінцева страховка незалежно від того, звідки взявся корінь (аргумент, змінна
+        # середовища, автовизначення): фіксувати можна лише існуючу теку.
+        sys.stderr.write(
+            f'projectmind: project root "{config.PROJECT_ROOT}" is not an existing directory; '
+            "refusing to start streamable-http with an unknown project root\n"
+        )
+        raise SystemExit(2)
+    root = config.lock_project_root()
+    log(f"streamable-http: корінь проєкту зафіксований: {root}")
+    return root
 
 
 def main() -> None:
     """Console entry point (`uvx projectmind-mcp` / `projectmind`)."""
     args = parse_cli_args()
+    if args.transport == "streamable-http":
+        fix_project_root_for_http(args)
+    else:
+        report_rejected_root_argument()
     import warmup
 
     apply_tool_profile()

@@ -33,6 +33,7 @@ import threading
 import time
 
 from logger import get_logger
+from timing import timed
 
 logger = get_logger()
 
@@ -68,19 +69,23 @@ def ensure_loaded() -> None:
         # first search, which runs in a tool worker — exactly the thread this
         # module exists to keep numpy out of. Import it here, on the main thread.
         try:
-            import rank_bm25  # noqa: F401  (numpy)
+            with timed("import rank_bm25"):
+                import rank_bm25  # noqa: F401  (numpy)
         except Exception as exc:
             logger.warning(f"Keyword backend (rank_bm25) could not be imported: {exc}")
         try:
-            import symbol_graph  # noqa: F401  (tree-sitter grammars)
+            with timed("import symbol_graph"):
+                import symbol_graph  # noqa: F401  (tree-sitter grammars)
         except Exception as exc:
             logger.warning(f"Symbol-graph module could not be imported: {exc}")
         try:
             from vector_store_manager import vector_stack_available
 
             if vector_stack_available():
-                import chromadb  # noqa: F401
-                import sentence_transformers  # noqa: F401  (numpy/torch)
+                with timed("import chromadb"):
+                    import chromadb  # noqa: F401
+                with timed("import sentence_transformers"):
+                    import sentence_transformers  # noqa: F401  (numpy/torch)
         except Exception as exc:
             logger.warning(f"Vector stack could not be imported: {exc}")
         _loaded = True

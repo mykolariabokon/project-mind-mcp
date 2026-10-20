@@ -6,6 +6,7 @@ import config
 from bm25_index import BM25Index, reciprocal_rank_fusion
 from cache_manager import TTLCache
 from logger import get_logger
+from timing import timed
 
 logger = get_logger()
 
@@ -103,9 +104,10 @@ class VectorStoreManager:
             logger.info("Initializing Vector Store (this may take 30-60 seconds on first run)...")
 
             try:
-                import chromadb
-                from chromadb.utils import embedding_functions
-                from sentence_transformers import SentenceTransformer
+                with timed("vector.import chromadb+sentence_transformers"):
+                    import chromadb
+                    from chromadb.utils import embedding_functions
+                    from sentence_transformers import SentenceTransformer
 
                 class LocalSentenceTransformerEmbeddingFunction(embedding_functions.EmbeddingFunction):  # type: ignore[type-arg]
                     def __init__(self, model_name: str) -> None:
@@ -117,22 +119,28 @@ class VectorStoreManager:
                         # round-trips to the Hub even when every file is already
                         # cached, so a slow or offline network turned "load the
                         # cached model" into a multi-minute stall.
-                        import torch
+                        with timed("vector.import torch"):
+                            import torch
 
                         device = "cuda" if torch.cuda.is_available() else "cpu"
                         try:
-                            self.model = SentenceTransformer(
-                                model_name, revision=revision, device=device, local_files_only=True
-                            )
+                            with timed("model.load", device=device, source="local cache"):
+                                self.model = SentenceTransformer(
+                                    model_name,
+                                    revision=revision,
+                                    device=device,
+                                    local_files_only=True,
+                                )
                             logger.info(f"Model loaded from local cache (device: {device})")
                         except Exception as cache_miss:
                             logger.info(
                                 f"Model not in local cache ({cache_miss}); "
                                 "downloading from the Hub (one-off, ~330 MB)..."
                             )
-                            self.model = SentenceTransformer(
-                                model_name, revision=revision, device=device
-                            )
+                            with timed("model.load", device=device, source="hub download"):
+                                self.model = SentenceTransformer(
+                                    model_name, revision=revision, device=device
+                                )
                             logger.info(
                                 f"Model downloaded and loaded successfully (device: {device})"
                             )
@@ -140,7 +148,10 @@ class VectorStoreManager:
                     def __call__(self, input: list[str]) -> list[list[float]]:  # type: ignore[override]
                         return self.model.encode(input, show_progress_bar=False).tolist()  # type: ignore[return-value]
 
-                self.chroma_client = chromadb.PersistentClient(path=str(config.VECTOR_STORE_DIR))
+                with timed("vector.chroma client"):
+                    self.chroma_client = chromadb.PersistentClient(
+                        path=str(config.VECTOR_STORE_DIR)
+                    )
                 logger.info("ChromaDB client initialized")
                 self.embedding_fn = LocalSentenceTransformerEmbeddingFunction(config.MODEL_NAME)
                 self.collection = self.chroma_client.get_or_create_collection(
