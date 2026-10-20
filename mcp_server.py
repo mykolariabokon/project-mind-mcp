@@ -366,11 +366,13 @@ def _root_locked_reply(requested: Path) -> str:
             f"Project root is fixed for this server: {fixed}. "
             "It is already the requested root; nothing was changed."
         )
+    # The requested path is deliberately NOT echoed: `Path.resolve()` normalizes
+    # case and follows junctions only for components that exist, so the echo told a
+    # session whether a path outside the root exists and where a link leads.
     return (
         f"Error: the project root is fixed for this server at {fixed} "
         "(streamable-http serves every session from one process, so a session "
-        "cannot re-point it). "
-        f"Requested: {requested}. To work on another project, start a separate "
+        "cannot re-point it). To work on another project, start a separate "
         "server with `--project-root <path>`."
     )
 
@@ -537,6 +539,13 @@ def health() -> str:
         f"- **Version**: {version_str}",
         f"- **MCP server dir**: `{MCP_SERVER_DIR}`",
         f"- **Project root**: `{root}`" + (" (fixed)" if config.is_project_root_locked() else ""),
+        *(
+            [
+                f"- ⚠️ `--project-root {config.ROOT_ARG_REJECTED}` was ignored (not an existing directory)"
+            ]
+            if config.ROOT_ARG_REJECTED is not None
+            else []
+        ),
         f"- **Memory file**: {'found' if memory_exists else 'missing'} (`{config.MEMORY_FILE}`)",
         f"- **Vector index**: {('empty' if chunks == 0 else f'{chunks} chunks') if chunks is not None else 'not initialized'}",
         f"- **Index ignore file**: `{resolve_index_ignore_file()}`",
@@ -3940,7 +3949,11 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     Невідомі аргументи ігноруються (parse_known_args): попередня версія їх теж
     не відхиляла, а клієнти MCP іноді додають свої прапорці.
     """
-    parser = argparse.ArgumentParser(prog="projectmind", description="ProjectMind MCP-сервер")
+    # allow_abbrev=False: config.find_project_root() шукає лише повні `--project-root`
+    # й `--project-root=`; скорочення (`--project-r`) argparse приймав би, а config — ні.
+    parser = argparse.ArgumentParser(
+        prog="projectmind", description="ProjectMind MCP-сервер", allow_abbrev=False
+    )
     parser.add_argument(
         "--transport",
         choices=["stdio", "streamable-http"],
@@ -3962,6 +3975,18 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     args, _unknown = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
     return args
+
+
+def report_rejected_root_argument() -> None:
+    """stdio лишає поведінку «непридатний --project-root → автовизначення», але не мовчки."""
+    if config.ROOT_ARG_REJECTED is None:
+        return
+    message = (
+        f"--project-root {config.ROOT_ARG_REJECTED} ignored (not an existing directory); "
+        f"using the auto-detected root {config.PROJECT_ROOT}"
+    )
+    log(message)
+    sys.stderr.write(f"projectmind: {message}\n")
 
 
 def fix_project_root_for_http(args: argparse.Namespace) -> Path:
@@ -4002,6 +4027,8 @@ def main() -> None:
     args = parse_cli_args()
     if args.transport == "streamable-http":
         fix_project_root_for_http(args)
+    else:
+        report_rejected_root_argument()
     import warmup
 
     apply_tool_profile()

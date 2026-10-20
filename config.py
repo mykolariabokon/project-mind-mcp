@@ -42,8 +42,9 @@ def find_project_root() -> Path:
     global ROOT_ARG_REJECTED
     present, value = _root_argument(sys.argv)
     if present:
-        if value and Path(value).resolve().exists():
-            return Path(value).resolve()
+        text = (value or "").strip()
+        if text and Path(text).resolve().exists():
+            return Path(text).resolve()
         ROOT_ARG_REJECTED = repr(value)
 
     for env_var in ["WORKSPACE_FOLDER", "PROJECT_ROOT", "PROJECT_PATH"]:

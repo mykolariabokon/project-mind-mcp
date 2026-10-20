@@ -541,3 +541,82 @@ def test_asgi_apps_lock_the_root_when_they_are_built(root_pair, factory: str) ->
     getattr(mcp_server.mcp, factory)()
 
     assert config.is_project_root_locked()
+
+
+# --- другий прохід #8: розбір аргумента, відлуння відмови, мовчання stdio ----------------
+
+
+def test_whitespace_only_project_root_counts_as_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Path("   ").resolve() на Windows дає поточну теку: без обрізання такий рядок
+    # приймався б за cwd, і логер створював би там .ai/ до будь-якої відмови.
+    monkeypatch.setattr(sys, "argv", ["projectmind", "--project-root", "   "])
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", None)
+
+    config.find_project_root()
+
+    assert config.ROOT_ARG_REJECTED is not None
+
+
+def test_cli_does_not_accept_abbreviated_project_root() -> None:
+    # config.find_project_root розуміє лише повні форми; argparse не має права приймати
+    # скорочення, які config не бачить (два розбирачі одного прапорця розходились).
+    import mcp_server
+
+    assert mcp_server.parse_cli_args(["--project-r", "x"]).project_root is None
+    assert mcp_server.parse_cli_args(["--project-ro=x"]).project_root is None
+    assert mcp_server.parse_cli_args(["--project-root=x"]).project_root == "x"
+
+
+def test_refusal_does_not_echo_the_requested_path(root_pair) -> None:
+    # resolve() нормалізує регістр і йде за junction лише для існуючих складових,
+    # тож відлуння шляху в відмові відрізняло «є» від «немає» й розкривало ціль посилання.
+    import mcp_server
+
+    _root_a, root_b = root_pair
+    config.lock_project_root()
+    missing = root_b / "no-such-dir"
+
+    replies = {
+        "set existing": mcp_server.set_project_root(str(root_b)),
+        "set missing": mcp_server.set_project_root(str(missing)),
+        "init existing": mcp_server.session_init(project_path=str(root_b)),
+        "init missing": mcp_server.session_init(project_path=str(missing)),
+    }
+
+    assert len(set(replies.values())) == 1, replies
+    for reply in replies.values():
+        assert str(root_b) not in reply and "no-such-dir" not in reply, reply
+
+
+def test_stdio_reports_a_rejected_project_root(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import mcp_server
+
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", "'/definitely/not/here'")
+
+    mcp_server.report_rejected_root_argument()
+
+    err = capsys.readouterr().err
+    assert "/definitely/not/here" in err and "ignored" in err, err
+    assert str(config.PROJECT_ROOT) in err, err
+
+
+def test_health_names_a_rejected_project_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcp_server
+
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", "'/definitely/not/here'")
+
+    assert "/definitely/not/here" in mcp_server.health()
+
+
+def test_nothing_is_reported_when_the_project_root_was_fine(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import mcp_server
+
+    monkeypatch.setattr(config, "ROOT_ARG_REJECTED", None)
+
+    mcp_server.report_rejected_root_argument()
+
+    assert capsys.readouterr().err == ""
